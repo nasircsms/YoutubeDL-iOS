@@ -215,6 +215,7 @@ extension Downloader: URLSessionDownloadDelegate {
                     let tasks = await session.tasks.2
                     guard let task = selector(tasks.filter { $0.state == .suspended }) else {
                         print(#function, "no more task", tasks.map(\.state.rawValue))
+                        isDownloading = false
                         return
                     }
                     print(#function, task.kind, task.originalRequest?.value(forHTTPHeaderField: "Range") ?? "no range", task.taskDescription ?? "no task description")

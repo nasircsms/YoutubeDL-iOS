@@ -229,7 +229,9 @@ open class YoutubeDL: NSObject {
             
             switch kind {
             case .complete:
-                export(url)
+//                export(url)
+                finishedContinuation?.yield(url)
+//                downloader.isDownloading = false
             case .videoOnly, .audioOnly:
                 let directory = url.deletingLastPathComponent()
                 guard let download = pendingDownloads.first(where: { $0.directory.path == directory.path }) else {
@@ -238,10 +240,12 @@ open class YoutubeDL: NSObject {
                 }
                 guard tryMerge(directory: directory, title: url.title, timeRange: download.timeRange) else { return }
                 finishedContinuation?.yield(url)
+//                downloader.isDownloading = false
             case .otherVideo:
                 do {
                     try await transcode(directory: url.deletingLastPathComponent())
                     finishedContinuation?.yield(url)
+//                    downloader.isDownloading = false
                 } catch {
                     print(error)
                 }
@@ -331,6 +335,25 @@ open class YoutubeDL: NSObject {
     lazy var popenHandler = PythonFunction { args in
         print(#function, args)
         let popen = args[0]
+        let result = Array<String?>(repeating: nil, count: 2)
+        
+        if let args: [String] = Array(args[1][0]) {
+            let exitCode = self.handleFFmpeg(args: args)
+            popen.returncode = PythonObject(exitCode)
+            
+            // Function to read output from pipes
+            func read(pipe: Pipe) -> String? {
+                let data = pipe.fileHandleForReading.availableData
+                let output = String(data: data, encoding: .utf8)
+                return output
+            }
+            
+            return Python.tuple(result)
+        }
+        return Python.tuple(result)
+        /*
+        print(#function, args)
+        let popen = args[0]
         var result = Array<String?>(repeating: nil, count: 2)
         if var args: [String] = Array(args[1][0]) {
             // save standard out/error
@@ -365,6 +388,7 @@ open class YoutubeDL: NSObject {
             return Python.tuple(result)
         }
         return Python.tuple(result)
+        */
     }
     
     func handleFFmpeg(args: [String]) -> Int {
@@ -459,13 +483,14 @@ open class YoutubeDL: NSObject {
         var directory: URL?
         var timeRange: Range<TimeInterval>?
         let bitRate: Double?
-        let title: String
-        if let formatSelector = formatSelector {
+        var title: String = info?.safeTitle ?? "\(Int(Date().timeIntervalSince1970))"
+        if let formatSelector = formatSelector,
+           let info = info {
             (formats, directory, timeRange, bitRate, title) = await formatSelector(info)
             guard !formats.isEmpty else { throw YoutubeDLError.canceled }
         } else {
             bitRate = formats[0].vbr
-            title = info.safeTitle
+            title = info?.safeTitle ?? "\(Int(Date().timeIntervalSince1970))"
         }
         
         pendingDownloads.append(Download(formats: [],
@@ -476,10 +501,10 @@ open class YoutubeDL: NSObject {
                                          bitRate: bitRate,
                                          transcodePending: false))
         
-        await downloader.session.allTasks.forEach { $0.cancel() }
+//        await downloader.session.allTasks.forEach { $0.cancel() }
         
         for format in formats {
-            try download(format: format, resume: !downloader.isDownloading || isTest, chunked: options.contains(.chunked), directory: directory ?? downloadsDirectory, title: info.safeTitle)
+            try download(format: format, resume: !downloader.isDownloading || isTest, chunked: options.contains(.chunked), directory: directory ?? downloadsDirectory, title: title)
         }
         
         for await url in finished {
@@ -575,7 +600,7 @@ open class YoutubeDL: NSObject {
         }
     }
    
-    open func extractInfo(url: URL) async throws -> ([Format], Info) {
+    open func extractInfo(url: URL) async throws -> ([Format], Info?) {
         let pythonObject: PythonObject
         if let _pythonObject = self.pythonObject {
             pythonObject = _pythonObject
@@ -597,7 +622,11 @@ open class YoutubeDL: NSObject {
             formats.append(format)
         }
         
-        return (formats, try decoder.decode(Info.self, from: info))
+        if info.description.contains("formats") {
+            return (formats, try decoder.decode(Info.self, from: info))
+        }
+
+        return (formats, nil)
     }
     
     func tryMerge(directory: URL, title: String, timeRange: TimeRange?) -> Bool {
